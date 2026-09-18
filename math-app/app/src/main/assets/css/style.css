@@ -274,3 +274,16 @@ body.tv .opt.opt-num{font-size:48px}
 body.tv .app-q{font-size:28px;line-height:1.8}
 body.tv .vert .v-row{font-size:52px}
 body.tv .vert{min-width:280px}
+orm: scale(1.12); }
+/* 图标远距离再放大（仅 TV） */
+body.tv .grade-card .g-emoji { font-size: 80px; }
+body.tv .mode-card .m-icon { font-size: 64px; }
+body.tv .big-emoji { font-size: 170px; }
+
+/* 首页顶部升级提示条（不打断做题，点 × 则本次版本不再提示） */
+.upd-bar{position:fixed;left:0;right:0;top:0;z-index:45;display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--ink);color:#fff;font-size:14px;box-shadow:var(--shadow)}
+.upd-txt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upd-bar button{border:0;border-radius:12px;padding:6px 14px;font-weight:700;font-size:14px;cursor:pointer}
+.upd-go{background:var(--green);color:#173}
+.upd-x{background:transparent;color:#fff;font-size:18px;padding:2px 8px}
+@media (min-width:900px){.upd-bar{font-size:20px;padding:12px 24px}.upd-bar button{font-size:20px;padding:10px 22px}}
