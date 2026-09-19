@@ -114,6 +114,9 @@ jobs:
           node tools/gen-hot.mjs --out page/hot \
             --base "https://${{ github.repository_owner }}.github.io/${REPO}/hot/"
 
+      - name: 生成资源包（v3.0 新通道：图片/音频/新增玩法都能热更）
+        run: node tools/gen-pack.mjs --out page/hot/pack
+
       - name: 下载已签名 APK（构建失败时跳过，不影响热更发布）
         uses: actions/download-artifact@v4
         continue-on-error: true
