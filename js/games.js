@@ -464,3 +464,32 @@ function startChallenge(){
   window.__mathTimer = timer;
   mk();
 }
+
+/* ===================== 玩法注册表（新增玩法支持热更） =====================
+ * 新增玩法不用出新 APK：把新玩法写进 js/game-xxx.js，在文件里调用
+ *   registerGame({ id:"mygame", name:"新玩法", icon:"🎯", desc:"一句话说明", start: startMy });
+ * tools/gen-pack.mjs 会自动扫到它（从 registerGame({id:"…"}) 读出 id），
+ * boot.js 把这类文件插在 js/games.js 之后加载 —— 首页自动出现入口。
+ * ======================================================================== */
+window.GAMES = window.GAMES || [];
+window.registerGame = function (g) {
+  if (!g || !g.id) return null;
+  for (var i = 0; i < window.GAMES.length; i++) {
+    if (window.GAMES[i].id === g.id) { window.GAMES[i] = g; return g; }   // 同 id 覆盖（热更改玩法）
+  }
+  window.GAMES.push(g);
+  return g;
+};
+window.getGame = function (id) {
+  for (var i = 0; i < window.GAMES.length; i++) if (window.GAMES[i].id === id) return window.GAMES[i];
+  return null;
+};
+registerGame({ id:"practice", name:"口算练习", icon:"🧮", desc:"8 道题闯关，稳扎稳打", start: startPractice });
+registerGame({ id:"oral", name:"限时口算", icon:"⏱️", desc:"60 秒速算，看看多快", start: startOral });
+registerGame({ id:"vertical", name:"竖式填空", icon:"📐", desc:"竖式里缺了谁？", start: startVertical });
+registerGame({ id:"kousj", name:"口诀接龙", icon:"✖️", desc:"乘法口诀张口就来", start: startKousj });
+registerGame({ id:"app", name:"应用题闯关", icon:"📖", desc:"生活中的数学题", start: startApp });
+registerGame({ id:"shape", name:"图形分类", icon:"🔷", desc:"认图形，比特征", start: startShape });
+registerGame({ id:"unit", name:"单位换算", icon:"📏", desc:"米厘米、元角分", start: startUnit });
+registerGame({ id:"frac", name:"分数比大小", icon:"🍰", desc:"几分之几谁更大", start: startFrac });
+registerGame({ id:"challenge", name:"综合挑战", icon:"🏆", desc:"口算+图形+单位大混战", start: startChallenge });

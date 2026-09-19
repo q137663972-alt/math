@@ -1,5 +1,6 @@
 # 构建产物不入库
 *.apk
+!apk/MathPlayground.apk
 .gradle/
 build/
 local.properties

@@ -1,19 +1,28 @@
-/* ===================== js/boot.js · 热更引导器 =====================
- * 【冻结文件】本文件永不参与热更 —— 改它必须出新 APK。
+/* ===================== js/boot.js · 通用热更引导器（v3.0） =====================
+ * 【冻结文件】本文件在 APK 里，永不参与热更 —— 改它必须出新 APK。
  *
- * 三层架构：
- *   第 1 层 内置 assets   ← APK 里的原始版本，永远可用
- *   第 2 层 本地缓存      ← 上次后台下载好的新版（localStorage，内容寻址）
- *   第 3 层 远程 hot/     ← GitHub Pages 上的最新版
+ * 架构（v3.0 起，内容不再受格式和体积限制）：
+ *   第 1 层 内置 assets      ← APK 里的完整可玩版本，永远可用（无网也不白屏）
+ *   第 2 层 files/hot/       ← 上次后台装好的资源包（任意格式：js/css/图片/音频/字体）
+ *   第 3 层 远程 hot/pack/   ← GitHub Pages 上的最新资源包（zip）
  *
- * 铁律：**启动路径零网络**。有缓存用缓存（离线也是新版），没缓存用内置，
- * 两者都是纯本地同步执行。网络只发生在启动成功 3 秒后的后台更新里，
- * 失败的最坏结果只是「这次没更新上」，绝不会白屏、绝不会卡启动。
+ * 与旧版最大的不同：内容不再塞 localStorage（配额只有 5MB），而是由原生桥
+ * AndroidHot 把 zip 落到 files/hot/，再用虚拟域 https://local.hot/ 读取。
+ * 于是图片、音频、字体、新增玩法的 js 全都能热更，想多大就多大。
  *
- * 调试：打开 index.html#hotlog 看启动日志（不用 adb、不用改 Java）
- * 逃生：打开 index.html#nohot 强制走内置版本
- * 测试：打开 index.html#hotbase=http://127.0.0.1:8899/hot/ 指定热更源
- * ================================================================== */
+ * 玩法热更：任何 js/game-*.js 都会被 tools/gen-pack.mjs 自动扫进资源包，
+ * boot.js 把它们插在 js/games.js 之后加载 —— 新增玩法不用出新 APK。
+ *
+ * 铁律不变：
+ *   · **启动路径零网络** —— 启动时只读本地（内置或已装好的资源包），
+ *     网络只发生在启动成功 3 秒后的后台更新里。
+ *   · **绝不白屏** —— 1.5s 哨兵没渲染出 #app 就判失败：标记坏包 → 回滚 → 重载。
+ *     熔断状态存在原生 SharedPreferences 里，热更的 js 再怎么坏也毁不掉逃生通道。
+ *
+ * 调试：index.html#hotlog 看启动日志（不用 adb、不用改 Java）
+ * 逃生：index.html?safe=1 或 #nohot 强制走内置版本
+ * 测试：index.html#hotbase=http://127.0.0.1:8899/hot/ 指定热更源
+ * ============================================================================ */
 (function () {
   "use strict";
 
@@ -21,6 +30,8 @@
   var APP       = "math";
   var HOT_BASE  = "https://q137663972-alt.github.io/math/hot/";
   var HOT_TOKEN = "math-2026";
+  /* 内置兜底清单：顺序即注入顺序。热更包里有的文件会顶掉同路径的内置文件，
+     热更包里新增的文件（玩法 js）会插入在 js/games.js 之后。 */
   var BUILTIN   = [
     "js/cp.js",
     "js/data-m1.js", "js/data-m2.js", "js/data-m3.js",
@@ -33,15 +44,12 @@
     "js/tv.js",
     "js/update.js"
   ];
-  var BIG = [];                       // 大文件：缓存失败就继续用内置的（英语/数学没有大文件）
   var CP_BASE = "https://q137663972-alt.github.io/math/content/";
 
-  var T_MANIFEST = 6000;              // 拉 manifest 超时
-  var T_FILE     = 20000;             // 拉单个文件超时
   var T_SENTINEL = 1500;              // 等启动哨兵
   var BG_DELAY   = 3000;              // 启动成功后多久开始后台更新
 
-  /* ---------- 调试开关：#hotbase= / #nohot / #hotlog ---------- */
+  /* ---------- 调试开关：#hotbase= / ?safe=1 / #nohot / #hotlog ---------- */
   var HASH = String(location.hash || "");
   function hashArg(name) {
     var m = HASH.match(new RegExp("(?:^|[#&])" + name + "=([^&]+)"));
@@ -49,7 +57,8 @@
   }
   var hb = hashArg("hotbase");
   if (hb) HOT_BASE = hb.replace(/([^/])$/, "$1/");
-  var NO_HOT  = HASH.indexOf("nohot")  >= 0;
+  var SEARCH = String(location.search || "");
+  var NO_HOT  = HASH.indexOf("nohot") >= 0 || /[?&]safe=1\b/.test(SEARCH);
   var HOT_LOG = HASH.indexOf("hotlog") >= 0;
 
   window.CP_BASE = CP_BASE;           // 必须在 cp.js 之前
@@ -61,10 +70,16 @@
     try { location.hash = "hotlog"; location.reload(); } catch (e) {}
   };
   window.HOT_BASE = HOT_BASE;
+  window.HOT_APP = APP;
 
-  /* ---------- 设备能力桥（通用壳提供 window.AndroidDevice；老壳/浏览器自动降级） ----------
-   * 手机 / 平板 / 电视共用一个 APK，屏方向与遥控器适配都由这里的结果驱动。
-   * 桥不存在时（浏览器预览、老壳）全部走 UA/尺寸兜底，行为与旧版一致。 */
+  var LOG = [];
+  function log(s) { LOG.push(s); try { console.log("[boot] " + s); } catch (e) {} }
+  window.__HOT_LOG = LOG;
+  log("start base=" + HOT_BASE);
+
+  /* ============================================================
+   * 1. 设备判定 —— 越早越好，CSS 断点和 tv.js 都依赖它
+   * ============================================================ */
   var D = window.AndroidDevice || null;
   var DEV = { tv: false, sw: 0, touch: true, mic: false, apk: 0, native: !!D };
   try {
@@ -81,18 +96,12 @@
   }
   window.__dev = DEV;
   try {
-    /* #tv 调试开关：无 TV 设备时在浏览器里模拟 TV（tv.js 里同样判了 hash，这里必须同步判，
-       否则 body.tv 加不上、TV 断点样式整块失效）。 */
+    /* #tv 调试开关：无 TV 设备时在浏览器里模拟 TV（tv.js 里同样判了 hash，
+       这里必须同步判，否则 body.tv 加不上、TV 断点样式整块失效）。 */
     var forceTV = /tv/.test(String(location.hash || ""));
     document.body.classList.add((DEV.tv || forceTV) ? "tv" : (DEV.sw >= 600 ? "tablet" : "phone"));
   } catch (e) {}
   log("dev tv=" + DEV.tv + " sw=" + DEV.sw + " touch=" + DEV.touch + " apk=" + DEV.apk);
-  window.HOT_APP = APP;
-
-  var LOG = [];
-  function log(s) { LOG.push(s); try { console.log("[boot] " + s); } catch (e) {} }
-  window.__HOT_LOG = LOG;
-  log("start base=" + HOT_BASE);
 
   /* ---------- 当前 APK 版本（由原生桥提供，没有桥就是 0） ---------- */
   var APK_VER = 0;
@@ -100,95 +109,114 @@
   if (!APK_VER && window.__dev) APK_VER = window.__dev.apk || 0;
   window.HOT_VER = APK_VER;
 
-  /* ---------- 存储：localStorage（IndexedDB 在 file:// 下不可靠，不用） ---------- */
-  var LS = null;
-  try {
-    localStorage.setItem("__hot_t", "1"); localStorage.removeItem("__hot_t");
-    LS = localStorage;
-  } catch (e) { log("no localStorage: " + e); }
+  /* ---------- 热更桥（不存在就是浏览器/老壳，自动走内置） ---------- */
+  var H = window.AndroidHot || null;
+  if (!H) log("no AndroidHot bridge → builtin only");
 
-  function K(k) { return "hot." + k; }
-  function get(k) { try { return LS ? LS.getItem(K(k)) : null; } catch (e) { return null; } }
-  function set(k, v) { try { LS.setItem(K(k), v); return true; } catch (e) { log("set fail " + k); return false; } }
-  function del(k) { try { LS.removeItem(K(k)); } catch (e) {} }
-  function allKeys(pre) {
-    var r = [], i, k, p = "hot." + pre;
-    if (!LS) return r;
-    for (i = 0; i < LS.length; i++) { k = LS.key(i); if (k && k.indexOf(p) === 0) r.push(k.slice(4)); }
-    return r;
+  /* 页面加载完成后把日志画出来（#hotlog） */
+  window.addEventListener("load", function () {
+    if (!HOT_LOG) return;
+    var d = document.createElement("pre");
+    d.style.cssText = "position:fixed;left:0;right:0;top:0;bottom:0;z-index:9999;background:rgba(0,0,0,.88);" +
+      "color:#0f0;font:12px/1.5 monospace;overflow:auto;padding:12px;white-space:pre-wrap;margin:0";
+    d.textContent =
+      "HOT " + APP + "  apk=" + APK_VER + "  base=" + HOT_BASE + "\n" +
+      "native=" + DEV.native + "  dev=" + JSON.stringify(DEV) + "\n" +
+      "build=" + (MAN ? MAN.build : "-") + "  files=" + (MAN ? MAN.files.length : 0) + "\n\n" +
+      LOG.join("\n");
+    document.body.appendChild(d);
+  });
+
+  /* ============================================================
+   * 2. 读已装好的资源包清单（纯本地，零网络）
+   * ============================================================ */
+  var MAN = null;
+  function readManifest() {
+    if (!H) return null;
+    var t = "";
+    try { t = H.manifest(); } catch (e) { log("manifest read fail: " + e); return null; }
+    if (!t) { log("no hot pack"); return null; }
+    var m = null;
+    try { m = JSON.parse(t); } catch (e) { log("manifest broken"); return null; }
+    if (!m || !m.build || !m.files || !m.files.length) { log("manifest invalid"); return null; }
+    if (m.app && m.app !== APP) { log("manifest app mismatch"); return null; }
+    if (m.sig && m.sig !== HOT_TOKEN) { log("manifest sig mismatch"); return null; }
+    if (m.min_apk && APK_VER && APK_VER < m.min_apk) { log("manifest needs newer apk"); return null; }
+    try { if (H.isBad(m.build)) { log("build marked bad: " + m.build); return null; } } catch (e) {}
+    try { if (H.isDisabled()) { log("hot disabled"); return null; } } catch (e) {}
+    return m;
   }
-  function isBig(p) { return BIG.indexOf(p) >= 0; }
 
-  /* ---------- FNV-1a 双通道 32bit → 16 hex
-     必须与 tools/gen-hot.mjs 里的 fnv() 逐字一致 ---------- */
-  function fnv(s) {
-    var a = 0x811c9dc5, b = 0x1000193, i, c;
-    for (i = 0; i < s.length; i++) {
-      c = s.charCodeAt(i);
-      a = Math.imul(a ^ c, 16777619);
-      b = Math.imul(b ^ c, 2166136261);
+  /* ---------- 排出最终要注入的文件序列 ---------- */
+  function planFiles(m) {
+    var out = [], i, p, hotMap = {};
+    if (m) for (i = 0; i < m.files.length; i++) hotMap[m.files[i].p] = 1;
+    for (i = 0; i < BUILTIN.length; i++) {
+      p = BUILTIN[i];
+      out.push({ name: p, url: hotMap[p] ? ("https://local.hot/" + p) : p, hot: !!hotMap[p] });
+      /* 玩法 js 插在 games.js 之后：这样 app.js 首次渲染就能看到全部已注册玩法 */
+      if (p === "js/games.js" && m && m.games && m.games.length) {
+        for (var g = 0; g < m.games.length; g++) {
+          var gp = m.games[g].file || m.games[g];
+          if (typeof gp === "string" && gp) {
+            out.push({ name: gp, url: "https://local.hot/" + gp, hot: true, game: true });
+          }
+        }
+        log("games from pack: " + m.games.length);
+      }
     }
-    return ("0000000" + (a >>> 0).toString(16)).slice(-8) + ("0000000" + (b >>> 0).toString(16)).slice(-8);
-  }
-
-  /* ---------- 读缓存：核心文件全齐才切版本，大文件缺了就用内置 ---------- */
-  function readCache() {
-    if (!LS) { log("no storage"); return null; }
-    var b = get("build");
-    if (!b) { log("no cache"); return null; }
-    var idx;
-    try { idx = JSON.parse(get("i." + b)); } catch (e) { log("index broken"); return null; }
-    if (!idx || idx.app !== APP || !idx.files || !idx.files.length) { log("index invalid"); return null; }
-
-    var out = [], i, p, h, n, t;
-    for (i = 0; i < idx.files.length; i++) {
-      p = idx.files[i][0]; h = idx.files[i][1]; n = idx.files[i][2];
-      t = get("c." + h);
-      if (t != null && t.length === n && fnv(t) === h) { out.push({ name: p, text: t }); continue; }
-      if (isBig(p)) { log("big miss, use builtin: " + p); out.push({ name: p, url: p, text: null }); continue; }
-      log("cache broken: " + p);
-      return null;                                  // 核心文件缺失 → 整体回退内置
+    /* 资源包里新增的、BUILTIN 没有的非玩法文件（例如新的工具模块）追加到末尾 */
+    if (m) for (i = 0; i < m.files.length; i++) {
+      p = m.files[i].p;
+      if (BUILTIN.indexOf(p) < 0 && p !== "MANIFEST.json" && p !== "css/style.css" && p.indexOf("img/") !== 0 && !/^js\/game-.+\.js$/.test(p)) {
+        out.push({ name: p, url: "https://local.hot/" + p, hot: true });
+      }
     }
-    var css = get("c." + idx.cssH), shell = get("c." + idx.shellH);
-    if (css == null || fnv(css) !== idx.cssH) { log("css cache broken, use builtin"); css = null; }
-    if (shell == null || fnv(shell) !== idx.shellH) { log("shell cache broken, use builtin"); shell = null; }
-    log("cache hit build=" + b);
-    return { build: b, files: out, shell: shell, css: css };
+    return out;
   }
 
-  /* ---------- 注入 ---------- */
-  function applyShell(txt) {
-    if (txt == null) return;
-    try { document.body.innerHTML = txt; } catch (e) { log("shell inject fail " + e); }
-  }
-  function applyCss(txt) {
-    if (txt == null) return;                        // 保留 index.html 里的 <link id="css0">
+  /* ---------- 样式：资源包里有 css 就顶掉内置的 ---------- */
+  function applyHotCss(m) {
+    if (!m) return;
+    var has = false, i;
+    for (i = 0; i < m.files.length; i++) if (m.files[i].p === "css/style.css") has = true;
+    if (!has) return;
     var l = document.getElementById("css0");
     if (l && l.parentNode) l.parentNode.removeChild(l);
-    var s = document.createElement("style");
-    s.textContent = txt;
+    var s = document.createElement("link");
+    s.rel = "stylesheet";
+    s.href = "https://local.hot/css/style.css?b=" + m.build;
+    s.id = "css0";
+    /* 万一资源包里的 css 取不到，退回内置的，绝不能让页面裸奔 */
+    s.onerror = function () {
+      log("hot css failed → builtin");
+      var b = document.createElement("link");
+      b.rel = "stylesheet"; b.href = "css/style.css";
+      document.head.appendChild(b);
+    };
     document.head.appendChild(s);
+    log("css from pack");
   }
-  /* 内联 <script> 是同步执行的 → 插入顺序就是执行顺序；外链用串行 onload */
+
+  /* ============================================================
+   * 3. 注入（内联 <script> 同步执行；外链靠 async=false 保证顺序）
+   * ============================================================ */
   function run(files, cb) {
     var i = 0;
     (function next() {
       if (i >= files.length) { cb(true); return; }
       var f = files[i++], s = document.createElement("script");
-      if (f.text != null) {
-        s.textContent = f.text + "\n//# sourceURL=" + HOT_BASE + f.name;
-        document.body.appendChild(s);
-        next();
-      } else {
-        s.src = f.url; s.async = false;
-        s.onload = function () { next(); };
-        s.onerror = function () { log("load fail " + f.url); cb(false); };
-        document.body.appendChild(s);
-      }
+      /* 只有热更文件才加 ?b= 破缓存。内置的相对路径绝不能带 query ——
+         WebView 的 android_asset 会把 "js/games.js?b=0" 整个当文件名去 AssetManager 找，必然失败 */
+      s.src = f.url + (f.hot ? "?b=" + (MAN ? MAN.build : 0) : "");
+      s.async = false;
+      s.onload = function () { next(); };
+      s.onerror = function () { log("load fail " + f.url); cb(false); };
+      document.body.appendChild(s);
     })();
   }
 
-  /* ---------- 启动哨兵：app.js 已经把 #app 渲染出来了就算成功 ---------- */
+  /* ---------- 启动哨兵：app.js 把 #app 渲染出来了就算成功 ---------- */
   function bootOk() {
     try {
       return typeof window.render === "function" && window.app && window.app.childNodes.length > 0;
@@ -199,8 +227,7 @@
     (function spin() {
       if (bootOk()) {
         log("BOOT OK");
-        del("fails"); del("noboot");
-        gc();
+        if (H && MAN) { try { H.markOk(MAN.build); } catch (e) {} }
         setTimeout(bgUpdate, BG_DELAY);
         return;
       }
@@ -210,171 +237,81 @@
     if (!loadOk) onFail("script load error");
   }
 
-  /* ---------- 失败回退：绝不白屏 ---------- */
+  /* ---------- 失败回退：标记坏包 → 回滚 → 重载，绝不白屏 ---------- */
   function onFail(why) {
     log("FAIL " + why);
-    var f = (parseInt(get("fails"), 10) || 0) + 1;
-    set("fails", String(f));
-    if (f >= 2) {
-      set("disabled", "1");                          // 连续两次 → 永久关闭热更，不再 reload（避免死循环）
-      log("hot disabled permanently");
-      clearCache();
-      return;
-    }
-    set("noboot", "1");
-    clearCache();
+    if (!MAN) { log("builtin failed, nothing to roll back"); return; }
+    try { H && H.markBad(MAN.build); } catch (e) {}
+    try {
+      if (H && H.isDisabled()) { log("hot disabled permanently"); return; }
+    } catch (e) {}
     setTimeout(function () { try { location.reload(); } catch (e) {} }, 30);
   }
-  function clearCache() {
-    var ks = allKeys("c.").concat(allKeys("i.")), i;
-    for (i = 0; i < ks.length; i++) del(ks[i]);
-    del("build");
-  }
-  function gc() {
-    var b = get("build"), idx, keep = {}, i;
-    if (!b) return;
-    try { idx = JSON.parse(get("i." + b)); } catch (e) { return; }
-    if (!idx || !idx.files) return;
-    for (i = 0; i < idx.files.length; i++) keep[idx.files[i][1]] = 1;
-    if (idx.shellH) keep[idx.shellH] = 1;
-    if (idx.cssH) keep[idx.cssH] = 1;
-    allKeys("c.").forEach(function (k) { if (!keep[k.slice(2)]) del(k); });
-  }
 
-  /* ---------- 启动 ---------- */
-  function useCache(c) {
-    log("use cache " + c.build);
-    applyShell(c.shell); applyCss(c.css);
-    run(c.files, watch);
-  }
-  function useBuiltin() {
-    log("use builtin");
-    var files = [], i;
-    for (i = 0; i < BUILTIN.length; i++) files.push({ name: BUILTIN[i], url: BUILTIN[i], text: null });
-    run(files, watch);
-  }
-
-  if (NO_HOT) { log("nohot"); useBuiltin(); return; }
-  if (get("apkver") !== String(APK_VER)) {           // 换了 APK → 重置熔断
-    del("disabled"); del("fails"); set("apkver", String(APK_VER));
-    log("apkver -> " + APK_VER);
-  }
-  if (get("disabled") === "1") { log("disabled"); useBuiltin(); return; }
-  if (get("noboot") === "1") { del("noboot"); log("noboot → builtin"); useBuiltin(); return; }
-  var c = readCache();
-  if (c) useCache(c); else useBuiltin();
-
-  /* ---------- 后台更新（启动成功后才跑，绝不抢启动） ---------- */
+  /* ============================================================
+   * 4. 后台更新（启动成功后才跑，绝不抢启动）
+   * ============================================================ */
   function bgUpdate() {
-    if (get("disabled") === "1") return;
-    loadManifest(function (m) {
-      if (!m) { log("bg: no manifest"); return; }
-      if (m.build === get("build")) { log("bg: up to date"); return; }
-      log("bg: new build " + m.build);
-      download(m, function (ok) {
-        if (!ok) { log("bg: download failed, retry next launch"); return; }
-        var files = [], i;
-        for (i = 0; i < m.files.length; i++) files.push([m.files[i].p, m.files[i].h, m.files[i].n]);
-        if (!set("i." + m.build, JSON.stringify({
-          app: APP, ts: m.ts, shellH: m.shellH, cssH: m.cssH, files: files
-        }))) { log("bg: commit fail (quota)"); return; }
-        set("build", m.build);                       // ← 原子提交：只写这一个 key
-        log("bg: committed " + m.build);
-      });
-    });
+    if (!H) { log("bg: no bridge"); return; }
+    try { if (H.isDisabled()) { log("bg: disabled"); return; } } catch (e) {}
+    var url = HOT_BASE + "pack/manifest.json?t=" + Date.now();
+    log("bg: check " + url);
+    H.httpGet(url, "__hotPackManifest");
   }
 
-  /* manifest 用 <script src> 加载 —— 不依赖 CORS，最稳 */
-  function loadManifest(cb) {
-    var done = false;
-    var to = setTimeout(function () { if (!done) { done = true; log("manifest timeout"); cb(null); } }, T_MANIFEST);
-    var s = document.createElement("script");
-    s.src = HOT_BASE + "manifest.js?t=" + Date.now();
-    s.onload = function () {
-      if (done) return; done = true; clearTimeout(to);
-      cb(validManifest(window.HOT_MANIFEST) ? window.HOT_MANIFEST : null);
-    };
-    s.onerror = function () { if (done) return; done = true; clearTimeout(to); log("manifest net fail"); cb(null); };
-    document.head.appendChild(s);
-  }
-  function validManifest(m) {
-    if (!(m && m.build && m.files && m.files.length)) { log("manifest shape bad"); return false; }
-    if (m.app !== APP) { log("manifest app mismatch: " + m.app); return false; }
-    if (m.sig !== HOT_TOKEN) { log("manifest sig mismatch"); return false; }
-    if (m.min_apk && APK_VER && APK_VER < m.min_apk) { log("manifest needs newer apk"); return false; }
-    return true;
-  }
+  var PENDING = [], PENDING_NAME = "";
 
-  /* 只下变动文件（内容寻址 → 未变的直接跳过）；大文件失败不影响提交 */
-  function download(m, cb) {
-    var need = [], big = [], i, f;
-    for (i = 0; i < m.files.length; i++) {
-      f = m.files[i];
-      if (get("c." + f.h) != null) continue;
-      (isBig(f.p) ? big : need).push(f);
+  window.__hotPackManifest = function (txt) {
+    if (txt == null) { log("bg: no manifest"); return; }
+    var m = null;
+    try { m = JSON.parse(txt); } catch (e) { log("bg: manifest bad"); return; }
+    if (!m || !m.build) { log("bg: manifest shape bad"); return; }
+    if (!(m.packs && m.packs.length) && !m.zip) { log("bg: no packs"); return; }
+    if (m.app && m.app !== APP) return;
+    if (m.sig && m.sig !== HOT_TOKEN) return;
+    if (m.min_apk && APK_VER && APK_VER < m.min_apk) { log("bg: needs newer apk"); return; }
+    try { if (H.isBad(m.build)) { log("bg: build is bad"); return; } } catch (e) {}
+    if (MAN && MAN.build === m.build) { log("bg: up to date"); return; }
+    log("bg: install " + m.build);
+
+    /* 分包：manifest 里 packs 是一个数组（大资源包在前、带 MANIFEST.json 的
+       代码包在最后），逐个装完才算完成。老格式只有 zip 字段，也能兼容。 */
+    PENDING = (m.packs && m.packs.length) ? m.packs.slice()
+            : [{ name: m.zip, sha256: m.sha256 || "", size: m.size || 0 }];
+    PENDING_NAME = m.build;
+    installNext();
+  };
+
+  function installNext() {
+    if (!PENDING.length) {
+      log("bg: all packs installed");
+      try {
+        if (typeof window.toast === "function") window.toast("新内容已就绪，下次打开生效");
+      } catch (e) {}
+      return;
     }
-    if (get("c." + m.shellH) == null) need.push({ p: "shell.html", h: m.shellH, n: m.shellN });
-    if (get("c." + m.cssH) == null) need.push({ p: "css/style.css", h: m.cssH, n: m.cssN });
-
-    log("bg: need " + need.length + " + big " + big.length);
-    pull(need, false, function (ok) {
-      if (!ok) { cb(false); return; }
-      pull(big, true, function () { cb(true); });     // 大文件：成功与否都继续
-    });
-  }
-  function pull(list, bestEffort, cb) {
-    var i = 0;
-    (function next() {
-      if (i >= list.length) { cb(true); return; }
-      var f = list[i++];
-      fetchText(HOT_BASE + f.p + "?b=" + Date.now(), function (txt) {
-        if (txt == null || txt.length !== f.n || fnv(txt) !== f.h) {
-          log("bad file " + f.p);
-          if (bestEffort) { next(); return; }
-          cb(false); return;
-        }
-        if (!set("c." + f.h, txt)) {
-          log("QUOTA exceeded at " + f.p);
-          if (bestEffort) { next(); return; }
-          cb(false); return;
-        }
-        next();
-      });
-    })();
+    var pk = PENDING.shift();
+    log("bg: pack " + pk.name + " (" + (pk.size || "?") + "B)");
+    H.installPack(HOT_BASE + pk.name + "?b=" + PENDING_NAME, pk.sha256 || "");
   }
 
-  function fetchText(url, cb) {
-    var done = false;
-    var to = setTimeout(function () { if (!done) { done = true; cb(null); } }, T_FILE);
-    function fin(t) { if (done) return; done = true; clearTimeout(to); cb(t); }
-    try {
-      if (window.fetch) {
-        fetch(url, { cache: "no-store" }).then(function (r) {
-          return r && r.ok ? r.text() : null;
-        }).then(fin)["catch"](function () { fin(null); });
-      } else if (window.XMLHttpRequest) {
-        var x = new XMLHttpRequest();
-        x.open("GET", url, true);
-        x.timeout = T_FILE;
-        x.onload = function () { fin(x.status === 200 || x.status === 0 ? x.responseText : null); };
-        x.onerror = function () { fin(null); };
-        x.ontimeout = function () { fin(null); };
-        x.send();
-      } else { fin(null); }
-    } catch (e) { fin(null); }
-  }
+  window.__onHotProgress = function (done) { log("bg: " + done + "B"); };
 
-  /* ---------- #hotlog：页面上直接看启动日志 ---------- */
-  window.addEventListener("load", function () {
-    if (!HOT_LOG) return;
-    var d = document.createElement("pre");
-    d.style.cssText = "position:fixed;left:0;right:0;top:0;bottom:0;z-index:9999;background:rgba(0,0,0,.88);" +
-      "color:#0f0;font:12px/1.5 monospace;overflow:auto;padding:12px;white-space:pre-wrap;margin:0";
-    d.textContent =
-      "HOT " + APP + "  apk=" + APK_VER + "  base=" + HOT_BASE + "\n" +
-      "fetch=" + !!window.fetch + "  localStorage=" + !!LS + "  indexedDB=" + !!window.indexedDB + "\n" +
-      "build=" + get("build") + "  fails=" + get("fails") + "  disabled=" + get("disabled") + "\n\n" +
-      LOG.join("\n");
-    document.body.appendChild(d);
-  });
+  window.__onHotPack = function (st, msg) {
+    log("bg: pack " + st + (msg ? " " + msg : ""));
+    if (st !== "ok") { PENDING = []; return; }   // 装失败就整轮放弃，下次启动再试
+    installNext();
+  };
+
+  /* ============================================================
+   * 5. 启动
+   * ============================================================ */
+  if (NO_HOT) { log("nohot → builtin"); run(planFiles(null), watch); return; }
+
+  MAN = readManifest();
+  if (MAN) log("use pack build=" + MAN.build + " files=" + MAN.files.length);
+  else log("use builtin");
+
+  applyHotCss(MAN);
+  run(planFiles(MAN), watch);
 })();

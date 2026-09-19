@@ -180,7 +180,9 @@ function enterUnit(bi, ui){ state.bi = bi; state.ui = ui; state.view = "modes"; 
 
 function renderModes(){
   var u = curUnit();
-  var cards = MODES.map(function(m){
+  /* 注册表优先：热更下发的新玩法（js/game-*.js 里 registerGame）自动进首页 */
+  var list = (window.GAMES && window.GAMES.length) ? window.GAMES : MODES;
+  var cards = list.map(function(m){
     return '<div class="mode-card" onclick="startGame(\'' + m.id + '\')">' +
       '<div class="m-icon">' + m.icon + '</div>' +
       '<div class="m-name">' + m.name + '</div>' +
@@ -235,7 +237,9 @@ function startGame(mode){
     kousj: startKousj, app: startApp, shape: startShape,
     unit: startUnit, frac: startFrac, challenge: startChallenge
   };
-  var fn = map[mode];
+  var fn = null, G = window.GAMES || [];
+  for (var i = 0; i < G.length; i++) if (G[i].id === mode) { fn = G[i].start; break; }
+  if (!fn) fn = map[mode];                       // 注册表里没有 → 回退内置硬编码
   if(fn) fn();
   else toast("玩法暂未开放");
 }
