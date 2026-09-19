@@ -1,0 +1,11 @@
+window.APP_UPDATE={
+  "code": 5,
+  "name": "2.2",
+  "note": "热更源改走大陆可访问的 CDN（jsDelivr），特效/语音/知识圈等热更内容可正常下载",
+  "apk": "https://q137663972-alt.github.io/math/apk/MathPlayground.apk",
+  "apkMirror": "https://cdn.jsdelivr.net/gh/q137663972-alt/math@2ecfee6ce5ed1426fba00d3e238de0d6da11aae8/apk/MathPlayground.apk",
+  "phone": "https://q137663972-alt.github.io/math/apk/MathPlayground.apk",
+  "phoneMirror": "https://cdn.jsdelivr.net/gh/q137663972-alt/math@2ecfee6ce5ed1426fba00d3e238de0d6da11aae8/apk/MathPlayground.apk",
+  "tv": "https://q137663972-alt.github.io/math/apk/MathPlayground.apk",
+  "tvMirror": "https://cdn.jsdelivr.net/gh/q137663972-alt/math@2ecfee6ce5ed1426fba00d3e238de0d6da11aae8/apk/MathPlayground.apk"
+};
