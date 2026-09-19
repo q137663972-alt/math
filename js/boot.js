@@ -61,6 +61,32 @@
     try { location.hash = "hotlog"; location.reload(); } catch (e) {}
   };
   window.HOT_BASE = HOT_BASE;
+
+  /* ---------- 设备能力桥（通用壳提供 window.AndroidDevice；老壳/浏览器自动降级） ----------
+   * 手机 / 平板 / 电视共用一个 APK，屏方向与遥控器适配都由这里的结果驱动。
+   * 桥不存在时（浏览器预览、老壳）全部走 UA/尺寸兜底，行为与旧版一致。 */
+  var D = window.AndroidDevice || null;
+  var DEV = { tv: false, sw: 0, touch: true, mic: false, apk: 0, native: !!D };
+  try {
+    if (D) {
+      DEV.tv = !!D.isTV();
+      DEV.sw = D.swDp() || 0;
+      DEV.touch = !!D.hasTouch();
+      DEV.mic = !!D.hasMic();
+      DEV.apk = D.versionCode() || 0;
+    }
+  } catch (e) { log("device bridge fail: " + e); }
+  if (!DEV.sw) {
+    try { DEV.sw = Math.round(Math.min(window.screen.width, window.screen.height)); } catch (e) { DEV.sw = 360; }
+  }
+  window.__dev = DEV;
+  try {
+    /* #tv 调试开关：无 TV 设备时在浏览器里模拟 TV（tv.js 里同样判了 hash，这里必须同步判，
+       否则 body.tv 加不上、TV 断点样式整块失效）。 */
+    var forceTV = /tv/.test(String(location.hash || ""));
+    document.body.classList.add((DEV.tv || forceTV) ? "tv" : (DEV.sw >= 600 ? "tablet" : "phone"));
+  } catch (e) {}
+  log("dev tv=" + DEV.tv + " sw=" + DEV.sw + " touch=" + DEV.touch + " apk=" + DEV.apk);
   window.HOT_APP = APP;
 
   var LOG = [];
@@ -71,6 +97,7 @@
   /* ---------- 当前 APK 版本（由原生桥提供，没有桥就是 0） ---------- */
   var APK_VER = 0;
   try { if (window.AndroidUpdate) APK_VER = window.AndroidUpdate.getVersionCode() || 0; } catch (e) {}
+  if (!APK_VER && window.__dev) APK_VER = window.__dev.apk || 0;
   window.HOT_VER = APK_VER;
 
   /* ---------- 存储：localStorage（IndexedDB 在 file:// 下不可靠，不用） ---------- */

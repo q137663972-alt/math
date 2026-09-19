@@ -4,11 +4,17 @@
  * 核心：给所有可点击元素打 tabindex，接管方向键做几何最近邻导航，确认键触发 click。
  */
 (function () {
+  var DEV = window.__dev || {};
+
+  /* 判定顺序：#tv 调试开关 → 原生桥 window.__dev.tv（真机最准）→ UA 正则（浏览器兜底）。
+     #tv 必须排在 __dev.tv 前面：boot.js 在浏览器里也会把 __dev.tv 初始化成 false，
+     若先判它，#tv 永远轮不到。 */
   function detectTV() {
+    if (location.hash.indexOf("tv") >= 0) return true;
+    if (typeof DEV.tv === "boolean") return DEV.tv;
     try {
       if (/tv|googletv|android tv|aftenmab?|aft|smarttv|smart-tv|appletv|crkey|fugu|shield android tv|mi tv|fire tv|hisense|tcl/i.test(navigator.userAgent)) return true;
     } catch (e) {}
-    if (location.hash.indexOf("tv") >= 0) return true;
     try {
       // Android 但非精确指针（触摸/鼠标）设备，视为电视/盒子
       if (/android/i.test(navigator.userAgent) && !window.matchMedia("(pointer: fine)").matches && !("ontouchstart" in window)) return true;

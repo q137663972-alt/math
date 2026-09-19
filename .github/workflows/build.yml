@@ -15,10 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - project: math-app
-            artifact: MathPlaygroundTV-apk
-          - project: math-phone
-            artifact: MathPlaygroundPhone-apk
+          - project: math-universal
+            artifact: MathPlayground-apk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -128,7 +126,7 @@ jobs:
           if [ -d apks ]; then
             for d in apks/*/; do
               n=$(basename "$d")
-              out=$(echo "$n" | sed -E 's/^(.*)(TV|Phone)-apk$/\1-\2.apk/')
+              out=$(echo "$n" | sed -E 's/-apk$/.apk/')
               find "$d" -name '*.apk' -exec cp {} "page/apk/$out" \;
             done
           fi

@@ -26,8 +26,7 @@
 
 ```
 index.html / css/ / js/          H5 本体（纯静态，无构建）
-math-app/                        电视版壳（横屏 + 遥控器焦点 + LEANBACK_LAUNCHER）
-math-phone/                      手机版壳（竖屏 + 触屏交互）
+math-universal/                  通用壳（手机 / 平板 / 电视 一个包）
 .github/workflows/build.yml      CI：出 APK + 部署 GitHub Pages
 ```
 
@@ -49,8 +48,10 @@ python3 -m http.server 8892
 推送到 GitHub 后 Actions 自动构建；也可手动 `workflow_dispatch`。
 产物在 Release（临时）与 Actions Artifacts 中：
 
-- `MathPlayground-TV.apk`（电视版）
-- `MathPlayground-Phone.apk`（手机版）
+- `MathPlayground.apk` —— 手机 / 平板 / 电视通用，装一个就够
+
+包名 `com.example.mathplayground`。三端合一后不再区分电视版与手机版：
+屏幕方向按设备类型在运行时决定，遥控器/触屏各自适配，Android TV 首页以横幅显示。
 
 ## 出题器结构
 

@@ -1,9 +1,11 @@
 {
-  "code": 2,
-  "name": "1.1",
-  "note": "支持在线更新：题目和界面会自动变新，不用再手动装包",
-  "phone": "https://q137663972-alt.github.io/math/apk/MathPlayground-Phone.apk",
+  "code": 3,
+  "name": "2.0",
+  "note": "通用版：手机、平板、电视一个包全适配；签名已更换，需先卸载旧版再安装",
+  "apk": "https://q137663972-alt.github.io/math/apk/MathPlayground.apk",
+  "apkMirror": "",
+  "phone": "https://q137663972-alt.github.io/math/apk/MathPlayground.apk",
   "phoneMirror": "",
-  "tv": "https://q137663972-alt.github.io/math/apk/MathPlayground-TV.apk",
+  "tv": "https://q137663972-alt.github.io/math/apk/MathPlayground.apk",
   "tvMirror": ""
 }

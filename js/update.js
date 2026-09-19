@@ -38,8 +38,9 @@
     try { if (localStorage.getItem(SKIP_KEY) === String(u.code)) return; } catch (e) {}
 
     var isTV = (window.__isTV === true) || location.hash.indexOf("tv") >= 0;
-    var url    = isTV ? (u.tv || u.phone) : (u.phone || u.tv);
-    var mirror = isTV ? (u.tvMirror || u.phoneMirror) : (u.phoneMirror || u.tvMirror);
+    /* 通用包：apk/apkMirror 优先；老清单只有 phone/tv 时按设备回退（两者现已指向同一个包） */
+    var url    = u.apk || (isTV ? (u.tv || u.phone) : (u.phone || u.tv));
+    var mirror = u.apkMirror || (isTV ? (u.tvMirror || u.phoneMirror) : (u.phoneMirror || u.tvMirror));
     if (!url) return;
 
     var bar = document.createElement("div");
