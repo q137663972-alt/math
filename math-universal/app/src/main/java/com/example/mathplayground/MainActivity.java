@@ -81,6 +81,7 @@ public class MainActivity extends Activity {
     private static final String K_BAD   = "bad";       // JSON 数组，坏掉的 build
     private static final String K_CUR   = "cur";
     private static final String K_OFF   = "disabled";
+    private static final String K_APK   = "apk";         // 上次安装过的 APK 版本号（用于升级后清旧热更）
 
     private WebView webView;
     private SpeechRecognizer sr;
@@ -119,6 +120,11 @@ public class MainActivity extends Activity {
 
         webView.setWebViewClient(new LocalClient());
         webView.setWebChromeClient(new WebChromeClient());
+
+        /* 换了新 APK → 清掉旧热更残留：旧包可能是被判过「坏」或已熔断的版本，
+           留着会让用户觉得「改了没生效」。清空后本次一定跑内置的最新代码，
+           后台会重新拉一份干净的热更包。 */
+        resetHotOnUpgrade();
 
         srAvailable = SpeechRecognizer.isRecognitionAvailable(this);
         if (srAvailable) {
@@ -203,6 +209,10 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         try {
             PackageManager pm = getPackageManager();
+            /* 个别盒子会虚报 touchscreen 特性，被这条兜底误判成手机（竖屏锁死）。
+               先排除真正能打电话的手机/平板（有 telephony 必不是电视盒子），
+               再用「无触屏 → 电视」兜底，误判面就小多了。 */
+            if (pm != null && pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)) return false;
             if (pm != null && !pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) return true;
         } catch (Exception ignored) {}
         return false;
@@ -297,6 +307,28 @@ public class MainActivity extends Activity {
     }
 
     private SharedPreferences pref() { return getSharedPreferences(PREF, MODE_PRIVATE); }
+
+    private int apkVersionCode() {
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return (int) (Build.VERSION.SDK_INT >= 28 ? pi.getLongVersionCode() : pi.versionCode);
+        } catch (Exception e) { return 0; }
+    }
+
+    private void resetHotOnUpgrade() {
+        try {
+            SharedPreferences p = pref();
+            int cur = apkVersionCode();
+            if (cur <= 0) return;
+            if (p.getInt(K_APK, 0) == cur) return;
+            deleteDir(hotDir());
+            deleteDir(hotNewDir());
+            deleteDir(hotOldDir());
+            File tmp = new File(getFilesDir(), "pack.tmp.zip");
+            if (tmp.exists()) tmp.delete();
+            p.edit().clear().putInt(K_APK, cur).apply();
+        } catch (Exception ignored) {}
+    }
 
     private List<String> badList() {
         List<String> out = new ArrayList<String>();
@@ -758,8 +790,13 @@ public class MainActivity extends Activity {
         if (event.getAction() == KeyEvent.ACTION_UP
                 && (event.getKeyCode() == KeyEvent.KEYCODE_DPAD_CENTER
                     || event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+            /* 电视上 js/tv.js 已经在 keydown 里处理过确认键了（带 220ms 防抖）。
+               这里再 click() 一次 → 按一下点两下，表现为「OK 键要按两次」。
+               tv.js 起来后会打上 window.__tvKeyHandled，此时原生退让，
+               只在 tv.js 没跑到（非电视 / 脚本异常）时才兜底点一下。 */
             webView.evaluateJavascript(
-                "(function(){var e=document.activeElement; if(e&&e.click){e.click(); return true;} return false;})()",
+                "(function(){ if(window.__tvKeyHandled) return false; " +
+                "var e=document.activeElement; if(e&&e.click){e.click(); return true;} return false;})()",
                 null);
         }
         return super.dispatchKeyEvent(event);
