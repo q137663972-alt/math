@@ -1,0 +1,14 @@
+{
+  "app": "math",
+  "sig": "math-2026",
+  "build": "b5c3076339849159",
+  "min_apk": 3,
+  "ts": 1789879801469,
+  "packs": [
+    {
+      "name": "code.zip",
+      "sha256": "d835262dfa6193f9497d5430b9cf53645b8f1b9291d02e7ef6309455aefd5cf4",
+      "size": 53480
+    }
+  ]
+}
